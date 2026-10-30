@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Thermomètre horizontal</title>
+<style>
+  /* ---------- PALETTE ---------- */
+  :root{
+    --bg: #3d3d44;          /* fond de page */
+    --card: #333338;        /* fond de la carte */
+    --tube-dark: #2b2b31;   /* intérieur vide du tube */
+    --tube-border: #1c1c20; /* contour du tube et du réservoir */
+    --cold: #3dcadf;        /* couleur du minimum */
+    --warm: #f2c94c;        /* couleur intermédiaire (à 55 %) */
+    --hot: #f17a65;         /* couleur du maximum */
+    --text: #f2f2f4;
+    --muted: #9a9aa2;
+    --pct: 0;               /* position de la valeur, de 0 à 100 (mise à jour en JS) */
+    --level: var(--cold);   /* couleur correspondant à la valeur (mise à jour en JS) */
+    --speed: .25s;          /* durée des animations */
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    height:100%;
+    margin:0;
+  }
+  body{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    color:var(--text);
+  }
+
+  .card{
+    width:520px;
+    max-width:92vw;
+    padding:48px 40px 36px;
+    background:var(--card);
+    border-radius:24px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.45);
+  }
+
+  /* ---------- THERMOMÈTRE (horizontal) ---------- */
+  .thermo-wrap{
+    position:relative;
+    height:110px;
+    margin: 30px 10px 10px 44px; /* marge gauche : place pour le réservoir */
+    display:flex;
+    align-items:center;
+  }
+
+  .tube-outer{
+    position:relative;
+    flex:1;
+    height:30px;
+    background:var(--tube-dark);
+    border:5px solid var(--tube-border);
+    border-radius:15px;
+  }
+
+  /* Graduations au-dessus du tube : 21 traits, un grand tous les 5 */
+  .ticks{
+    position:absolute;
+    inset:0;
+    display:flex;
+    justify-content:space-between;
+    padding: 0 6px;
+    pointer-events:none;
+  }
+  .ticks span{
+    width:1px;
+    height:8px;
+    margin-top:-8px;
+    background: rgba(255,255,255,.28);
+  }
+  .ticks span:nth-child(5n+1){
+    height:13px;
+    margin-top:-13px;
+    background: rgba(255,255,255,.5);
+  }
+
+  /* Dégradé fixe sur toute la longueur du tube : la couleur d'un point
+     correspond toujours à sa température, quelle que soit la valeur.
+     On n'en montre que la partie gauche grâce à clip-path, ce qui évite
+     un calque de masquage et ne provoque pas de recalcul de mise en page. */
+  .fill{
+    position:absolute;
+    inset:0;
+    border-radius:15px;
+    background: linear-gradient(90deg, var(--cold) 0%, var(--warm) 55%, var(--hot) 100%);
+    clip-path: inset(0 calc(100% - var(--pct) * 1%) 0 0 round 15px);
+    transition: clip-path var(--speed) ease;
+  }
+
+  /* Réservoir (bulbe) à gauche du tube */
+  .bulb-outer{
+    position:absolute;
+    left:-34px;
+    top:50%;
+    transform: translateY(-50%);
+    width:68px;
+    height:68px;
+    border-radius:50%;
+    background:var(--tube-dark);
+    border:5px solid var(--tube-border);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .bulb-fill{
+    width:52px;
+    height:52px;
+    border-radius:50%;
+    background: var(--level);
+    transition: background-color var(--speed) ease;
+  }
+
+  /* Bulle affichant la valeur, placée au-dessus du niveau atteint */
+  .tooltip{
+    position:absolute;
+    top:-38px;
+    left:calc(var(--pct) * 1%);
+    transform: translateX(-50%);
+    background:var(--tube-border);
+    color:var(--text);
+    font-size:13px;
+    font-weight:600;
+    padding:4px 10px;
+    border-radius:8px;
+    white-space:nowrap;
+    transition: left var(--speed) ease;
+  }
+  .tooltip::after{ /* petite pointe sous la bulle */
+    content:"";
+    position:absolute;
+    left:50%;
+    bottom:-10px;
+    transform: translateX(-50%);
+    border:5px solid transparent;
+    border-top-color:var(--tube-border);
+  }
+
+  /* ---------- COMMANDES ---------- */
+  .controls{
+    margin-top: 34px;
+    display:flex;
+    align-items:center;
+    gap:14px;
+  }
+
+  input[type=range]{
+    flex:1;
+    -webkit-appearance:none;
+    appearance:none;
+    height:4px;
+    background: rgba(255,255,255,.2);
+    border-radius:2px;
+  }
+  input[type=range]:focus-visible{ outline:2px solid var(--cold); outline-offset:8px; }
+  /* Curseur du slider : même couleur que le niveau (Chrome/Safari puis Firefox) */
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;
+    width:18px;
+    height:18px;
+    border-radius:50%;
+    background: var(--level);
+    border:3px solid #fff;
+    cursor:pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,.4);
+  }
+  input[type=range]::-moz-range-thumb{
+    width:18px;
+    height:18px;
+    border-radius:50%;
+    background: var(--level);
+    border:3px solid #fff;
+    cursor:pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,.4);
+  }
+
+  /* Ligne Min / unité / Max */
+  .minmax{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-top:14px;
+    font-size:12px;
+    color:var(--muted);
+  }
+  .minmax label{ display:flex; align-items:center; gap:6px; }
+  .minmax input{
+    width:56px;
+    background:transparent;
+    border:none;
+    border-bottom:1px solid rgba(255,255,255,.25);
+    color:var(--text);
+    font:inherit;
+    font-size:13px;
+    padding:2px 0;
+    text-align:center;
+    -moz-appearance:textfield; /* masque les flèches sous Firefox */
+  }
+  .minmax input::-webkit-inner-spin-button,
+  .minmax input::-webkit-outer-spin-button{ -webkit-appearance:none; margin:0; }
+  .minmax input:focus{ outline:none; border-bottom-color: var(--cold); }
+
+  /* Bouton °C / °F (un vrai bouton : utilisable au clavier) */
+  .unit{
+    background:none;
+    border:none;
+    padding:2px 6px;
+    font:inherit;
+    font-weight:700;
+    color: var(--cold);
+    cursor:pointer;
+  }
+  .unit:hover{ opacity:.8; }
+  .unit:focus-visible{ outline:2px solid var(--cold); border-radius:4px; }
+
+  .info{
+    margin-top:26px;
+    text-align:center;
+    font-size:13px;
+    color:var(--muted);
+  }
+  .info b{ color:var(--text); }
+
+  /* Pas d'animation si l'utilisateur les a désactivées dans son système */
+  @media (prefers-reduced-motion: reduce){ :root{ --speed: 0s; } }
+</style>
+</head>
+<body>
+
+<div class="card" id="card">
+
+  <div class="thermo-wrap" aria-hidden="true">
+    <div class="bulb-outer"><div class="bulb-fill"></div></div>
+    <div class="tube-outer">
+      <div class="fill"></div>
+      <!-- 21 graduations -->
+      <div class="ticks"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+      <div class="tooltip" id="tooltip">20°C</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <input type="range" id="slider" min="-20" max="50" value="20" step="1" aria-label="Température">
+  </div>
+
+  <div class="minmax">
+    <label>Min <input type="number" id="minInput" value="-20" step="any"></label>
+    <button type="button" class="unit" id="unitToggle" aria-label="Changer d’unité">°C</button>
+    <label>Max <input type="number" id="maxInput" value="50" step="any"></label>
+  </div>
+
+  <div class="info">Glissez pour changer la température &middot; cliquez sur <b id="otherUnit">°C</b> pour passer en <span id="nextUnit">°F</span></div>
+
+</div>
+
+<script>
+(function(){
+  'use strict';
+
+  // ---------- Éléments ----------
+  var root       = document.documentElement;
+  var slider     = document.getElementById('slider');
+  var tooltip    = document.getElementById('tooltip');
+  var minInput   = document.getElementById('minInput');
+  var maxInput   = document.getElementById('maxInput');
+  var unitToggle = document.getElementById('unitToggle');
+  var otherUnit  = document.getElementById('otherUnit');
+  var nextUnit   = document.getElementById('nextUnit');
+
+  // ---------- État ----------
+  // Tout est stocké en °C ; l'unité ne sert qu'à l'affichage et à la saisie.
+  // Ainsi, passer de °C à °F et inversement ne fait jamais dériver les valeurs.
+  var state = { minC: -20, maxC: 50, valueC: 20, unit: 'C' };
+
+  // Couleurs du dégradé, identiques à celles du tube (--cold, --warm, --hot).
+  var STOPS = [
+    { p: 0,   c: [61, 202, 223] },  // froid : cyan
+    { p: 55,  c: [242, 201, 76] },  // tiède : ambre
+    { p: 100, c: [241, 122, 101] }  // chaud : rouge orangé
+  ];
+
+  // ---------- Outils ----------
+  function clamp(v, a, b){ return Math.min(Math.max(v, a), b); }
+
+  // Conversion °C → unité affichée, et unité affichée → °C.
+  function toUnit(c){ return state.unit === 'C' ? c : c * 9 / 5 + 32; }
+  function fromUnit(v){ return state.unit === 'C' ? v : (v - 32) * 5 / 9; }
+
+  // Arrondi à 1 décimale, sans « .0 » inutile.
+  function round1(v){ return Math.round(v * 10) / 10; }
+
+  // Couleur à une position (0–100 %), interpolée entre les deux couleurs voisines.
+  function colorAt(pct){
+    var a = pct > STOPS[1].p ? STOPS[1] : STOPS[0];
+    var b = pct > STOPS[1].p ? STOPS[2] : STOPS[1];
+    var t = (pct - a.p) / (b.p - a.p);
+    var rgb = a.c.map(function(v, i){ return Math.round(v + (b.c[i] - v) * t); });
+    return 'rgb(' + rgb.join(',') + ')';
+  }
+
+  // ---------- Affichage ----------
+  // Met à jour tout ce qui dépend de l'état. Le CSS lit --pct et --level :
+  // un seul passage écrit deux variables au lieu de modifier plusieurs éléments.
+  function render(){
+    var u = state.unit;
+    var pct = (state.valueC - state.minC) / (state.maxC - state.minC) * 100;
+
+    root.style.setProperty('--pct', pct.toFixed(2));
+    root.style.setProperty('--level', colorAt(pct));
+
+    // Le slider travaille dans l'unité affichée.
+    slider.min = toUnit(state.minC);
+    slider.max = toUnit(state.maxC);
+    slider.value = toUnit(state.valueC);
+
+    var label = Math.round(toUnit(state.valueC)) + '°' + u;
+    tooltip.textContent = label;
+    slider.setAttribute('aria-valuetext', label);
+
+    // On ne réécrit pas un champ en cours de saisie.
+    if (document.activeElement !== minInput) minInput.value = round1(toUnit(state.minC));
+    if (document.activeElement !== maxInput) maxInput.value = round1(toUnit(state.maxC));
+
+    unitToggle.textContent = otherUnit.textContent = '°' + u;
+    nextUnit.textContent = u === 'C' ? '°F' : '°C';
+  }
+
+  // ---------- Événements ----------
+  // Déplacement du slider : on convertit la position en °C.
+  slider.addEventListener('input', function(){
+    state.valueC = fromUnit(parseFloat(slider.value));
+    render();
+  });
+
+  // Validation de Min ou Max : valeur invalide → on garde l'ancienne ;
+  // il faut toujours au moins 1 degré d'écart entre Min et Max.
+  function onRangeChange(){
+    var min = parseFloat(minInput.value), max = parseFloat(maxInput.value);
+    if (isFinite(min)) state.minC = fromUnit(min);
+    if (isFinite(max)) state.maxC = fromUnit(max);
+    if (state.maxC - state.minC < 1){
+      if (this === minInput) state.minC = state.maxC - 1;
+      else state.maxC = state.minC + 1;
+    }
+    state.valueC = clamp(state.valueC, state.minC, state.maxC);
+    this.blur(); // permet à render() de réécrire proprement la valeur saisie
+    render();
+  }
+  minInput.addEventListener('change', onRangeChange);
+  maxInput.addEventListener('change', onRangeChange);
+
+  // Changement d'unité : seul l'affichage change, l'état reste en °C.
+  unitToggle.addEventListener('click', function(){
+    state.unit = state.unit === 'C' ? 'F' : 'C';
+    render();
+  });
+
+  render();
+})();
+</script>
+
+</body>
+</html>

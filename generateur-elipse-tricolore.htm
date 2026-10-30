@@ -1,0 +1,168 @@
+<!doctype html><html lang="fr">
+<head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Générateur de cercle tricolore SVG</title>
+
+<style>
+body{font:16px system-ui,Arial;margin:24px auto;padding:0 20px;max-width:1000px;color:#222}
+main{display:grid;grid-template-columns:minmax(260px,360px) 1fr;gap:30px}
+label{display:block;margin:14px 0 4px}
+input{width:120px;padding:8px;font:inherit}
+button{padding:12px 18px;margin-top:18px;cursor:pointer}
+button:disabled{cursor:not-allowed}
+#preview{width:100%;height:auto;max-height:75vh;background:repeating-conic-gradient(#eee 0 25%,#fff 0 50%) 0 0/24px 24px;border:1px solid #ddd}
+#status{min-height:2em}
+#status.error{color:#b41f36}
+small{color:#555}
+@media(max-width:720px){main{grid-template-columns:1fr}}
+</style></head>
+
+<body><h1>Cercle SVG paramétrable</h1>
+
+<p>Dimensions extérieures : <strong>385 × 375 mm</strong>. Le rouge commence à 0° (en haut, à 12 heures), puis vient le blanc ; le bleu se termine à 360°. Le cercle aplati est entièrement fermé, sans ouverture. Les pourcentages correspondent aux longueurs des segments. La rotation déplace les trois segments ensemble sur l’ellipse, sans modifier sa forme.</p>
+
+<main><section>
+<label>Bleu (%) <input id="blue" type="number" min="0" max="100" step="0.1" value="60"></label>
+<label>Blanc (%) <input id="white" type="number" min="0" max="100" step="0.1" value="25"></label>
+<label>Rouge (%) <input id="red" type="number" min="0" max="100" step="0.1" value="15"></label>
+<label>Rotation des segments (°) <input id="rotation" type="number" min="-360" max="360" step="1" value="0"></label>
+<label>Épaisseur (mm) <input id="thickness" type="number" min="0.1" max="180" step="0.5" value="18"></label>
+<p id="status" role="status"></p>
+<button id="download" type="button">Télécharger le SVG</button>
+<p><small>Les proportions doivent totaliser 100 %. Le contour est contenu dans les dimensions indiquées. Chaque segment reste indépendant dans le SVG.</small></p>
+</section>
+
+<section><svg id="preview" xmlns="http://www.w3.org/2000/svg" width="385mm" height="375mm" viewBox="0 0 385 375" aria-label="Aperçu des segments"></svg></section>
+
+</main>
+<script>
+
+const W = 385, H = 375, CX = W / 2, CY = H / 2;
+const TAU = 2 * Math.PI, N = 4096, MAX_THICKNESS = 180;
+const NS = 'http://www.w3.org/2000/svg';
+
+// Ordre de tracé, sens horaire depuis le point de départ.
+const SECTIONS = [['red', '#b41f36'], ['white', '#ffffff'], ['blue', '#263c70']];
+
+const ids = ['blue', 'white', 'red', 'thickness', 'rotation'];
+const els = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
+const svg = document.getElementById('preview');
+const status = document.getElementById('status');
+const btn = document.getElementById('download');
+let valid = false, frame = 0;
+
+// Point de l'ellipse pour l'angle paramétrique θ
+// 0 = en haut, croissant dans le sens horaire.
+const point = (rx, ry, t) => [CX + rx * Math.sin(t), CY - ry * Math.cos(t)];
+
+// Table des longueurs d'arc cumulées,
+// recalculée seulement quand l'épaisseur change.
+let table = null;
+function getTable(rx, ry) {
+  if (table && table.rx === rx && table.ry === ry) return table;
+  const len = new Float64Array(N + 1);
+  let [px, py] = point(rx, ry, 0);
+  for (let i = 1; i <= N; i++) {
+    const [x, y] = point(rx, ry, TAU * i / N);
+    len[i] = len[i - 1] + Math.hypot(x - px, y - py);
+    px = x; py = y;
+  }
+  return table = { rx, ry, len, total: len[N] };
+}
+
+// Angle paramétrique → fraction du périmètre (0..1).
+function fractionAt({ len, total }, t) {
+  const u = (((t % TAU) + TAU) % TAU) / TAU * N, i = Math.min(N - 1, Math.floor(u));
+  return (len[i] + (u - i) * (len[i + 1] - len[i])) / total;
+}
+
+// Fraction du périmètre (non bornée) → angle paramétrique
+// (non borné, pour garder la continuité).
+function angleAt({ len, total }, f) {
+  const turns = Math.floor(f), target = (f - turns) * total;
+  let lo = 1, hi = N;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (len[mid] < target) lo = mid + 1; else hi = mid; }
+  const t = (lo - 1 + (target - len[lo - 1]) / (len[lo] - len[lo - 1])) / N * TAU;
+  return turns * TAU + t;
+}
+
+const fmt = n => String(Math.round(n * 1000) / 1000);
+
+// Segment tracé avec de vrais arcs d'ellipse (commande A) :
+// géométrie exacte et fichier léger.
+function arcPath(rx, ry, t0, t1) {
+  const n = Math.max(1, Math.ceil((t1 - t0) / Math.PI - 1e-9)); // chaque arc ≤ 180°
+  let [x, y] = point(rx, ry, t0);
+  let d = `M${fmt(x)} ${fmt(y)}`;
+  for (let k = 1; k <= n; k++) {
+    [x, y] = point(rx, ry, t0 + (t1 - t0) * k / n);
+    d += `A${fmt(rx)} ${fmt(ry)} 0 0 1 ${fmt(x)} ${fmt(y)}`;
+  }
+  return d;
+}
+
+function readValues() {
+  const v = {};
+  for (const id of ids) v[id] = els[id].value.trim() === '' ? NaN : Number(els[id].value);
+  return v;
+}
+
+function validate(v) {
+  if (!ids.every(id => Number.isFinite(v[id]))) return 'Tous les champs doivent être renseignés.';
+  if ([v.blue, v.white, v.red].some(p => p < 0)) return 'Les pourcentages ne peuvent pas être négatifs.';
+  const sum = v.blue + v.white + v.red;
+  if (Math.abs(sum - 100) > 1e-6) return `Total : ${sum.toLocaleString('fr-FR')} % — ajustez les valeurs pour atteindre 100 %.`;
+  if (!(v.thickness > 0 && v.thickness <= MAX_THICKNESS)) return `Épaisseur : entre 0 et ${MAX_THICKNESS} mm.`;
+  if (Math.abs(v.rotation) > 360) return 'Rotation : de −360° à 360°.';
+  return '';
+}
+
+function render() {
+  frame = 0;
+  const v = readValues(), error = validate(v);
+  valid = !error;
+  status.textContent = error || 'Total : 100 %';
+  status.classList.toggle('error', !valid);
+  btn.disabled = !valid;
+  if (!valid) { svg.replaceChildren(); return; }
+
+  const rx = (W - v.thickness) / 2, ry = (H - v.thickness) / 2;
+  const tab = getTable(rx, ry);
+  let f = fractionAt(tab, v.rotation * Math.PI / 180);
+  let t0 = angleAt(tab, f);
+  const paths = [];
+  for (const [name, color] of SECTIONS) {
+    const pct = v[name] / 100;
+    if (pct <= 0) continue;
+    f += pct;
+    const t1 = angleAt(tab, f);
+    const e = document.createElementNS(NS, 'path');
+    e.setAttribute('id', 'segment-' + name);
+    e.setAttribute('d', arcPath(rx, ry, t0, t1));
+    e.setAttribute('fill', 'none');
+    e.setAttribute('stroke', color);
+    e.setAttribute('stroke-width', fmt(v.thickness));
+    paths.push(e);
+    t0 = t1;
+  }
+  svg.replaceChildren(...paths);
+}
+
+// Regroupe les saisies rapides en un seul rendu par image.
+const schedule = () => { if (!frame) frame = requestAnimationFrame(render); };
+ids.forEach(id => els[id].addEventListener('input', schedule));
+
+btn.addEventListener('click', () => {
+  if (!valid) return;
+  const out = svg.cloneNode(true);
+  out.removeAttribute('id');
+  out.removeAttribute('aria-label');
+  const content = '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(out);
+  const url = URL.createObjectURL(new Blob([content], { type: 'image/svg+xml;charset=utf-8' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: 'cercle-segments-385x375mm.svg' });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+render();
+</script></body></html>
